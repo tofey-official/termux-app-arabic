@@ -61,6 +61,11 @@ final class TermuxInstaller {
 
     private static final String LOG_TAG = "TermuxInstaller";
 
+    /** The app asset that contains the bundled glibc runtime files for arm64 devices. */
+    private static final String GLIBC_BUNDLE_ASSET = "glibc/glibc-aarch64.zip";
+    /** Marker file written under $PREFIX/glibc after the bundled glibc runtime is extracted, containing the app version that extracted it. */
+    private static final String GLIBC_BUNDLE_MARKER_PATH = TERMUX_PREFIX_DIR_PATH + "/glibc/.termux-bundled-version";
+
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
         String bootstrapErrorMessage;
@@ -107,6 +112,7 @@ final class TermuxInstaller {
             if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
                 Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
             } else {
+                setupGlibcIfNeeded(activity);
                 whenDone.run();
                 return;
             }
@@ -221,6 +227,8 @@ final class TermuxInstaller {
                     // Recreate env file since termux prefix was wiped earlier
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
+                    setupGlibcIfNeeded(activity);
+
                     activity.runOnUiThread(whenDone);
 
                 } catch (final Exception e) {
@@ -234,6 +242,90 @@ final class TermuxInstaller {
                             // Activity already dismissed - ignore.
                         }
                     });
+                }
+            }
+        }.start();
+    }
+
+    /**
+     * Extract the glibc runtime bundled in the app assets into "$PREFIX/glibc" if it is missing or
+     * outdated, so that glibc-linked binaries (like the antigravity CLI) can run without manually
+     * installing the termux-glibc repository packages. The extraction is best-effort, runs in a
+     * background thread and is skipped on devices that do not support arm64-v8a.
+     */
+    static void setupGlibcIfNeeded(final Context context) {
+        new Thread() {
+            @Override
+            public void run() {
+                try {
+                    synchronized (TermuxInstaller.class) {
+                        // The bundled glibc runtime is only built for 64-bit arm devices.
+                        boolean isArm64Device = false;
+                        for (String abi : Build.SUPPORTED_ABIS) {
+                            if ("arm64-v8a".equals(abi)) {
+                                isArm64Device = true;
+                                break;
+                            }
+                        }
+                        if (!isArm64Device) {
+                            Logger.logInfo(LOG_TAG, "Bundled glibc setup skipped: no arm64-v8a support on device.");
+                            return;
+                        }
+
+                        String appVersionName = PackageUtils.getVersionNameForPackage(context);
+                        File loaderFile = new File(TERMUX_PREFIX_DIR_PATH, "glibc/lib/ld-linux-aarch64.so.1");
+                        File markerFile = new File(GLIBC_BUNDLE_MARKER_PATH);
+
+                        // Skip extraction if it was already done for this app version; a version
+                        // mismatch re-extracts so that app updates refresh the bundled runtime.
+                        if (FileUtils.regularFileExists(loaderFile.getAbsolutePath(), false)
+                            && FileUtils.regularFileExists(markerFile.getAbsolutePath(), false)) {
+                            try (BufferedReader markerReader = new BufferedReader(new InputStreamReader(new FileInputStream(markerFile)))) {
+                                if (appVersionName.equals(markerReader.readLine())) {
+                                    Logger.logInfo(LOG_TAG, "Bundled glibc runtime already extracted.");
+                                    return;
+                                }
+                            }
+                        }
+
+                        Logger.logInfo(LOG_TAG, "Extracting bundled glibc runtime from \"" + GLIBC_BUNDLE_ASSET + "\".");
+
+                        final byte[] buffer = new byte[8096];
+                        try (ZipInputStream zipInput = new ZipInputStream(context.getAssets().open(GLIBC_BUNDLE_ASSET))) {
+                            ZipEntry zipEntry;
+                            while ((zipEntry = zipInput.getNextEntry()) != null) {
+                                String zipEntryName = zipEntry.getName();
+                                File targetFile = new File(TERMUX_PREFIX_DIR_PATH, zipEntryName);
+                                if (zipEntry.isDirectory()) {
+                                    if (!targetFile.isDirectory() && !targetFile.mkdirs())
+                                        throw new RuntimeException("Failed to create directory: " + targetFile.getAbsolutePath());
+                                    continue;
+                                }
+                                File parentDir = targetFile.getParentFile();
+                                if (parentDir != null && !parentDir.isDirectory() && !parentDir.mkdirs())
+                                    throw new RuntimeException("Failed to create parent directory: " + parentDir.getAbsolutePath());
+                                try (FileOutputStream outStream = new FileOutputStream(targetFile)) {
+                                    int readBytes;
+                                    while ((readBytes = zipInput.read(buffer)) != -1)
+                                        outStream.write(buffer, 0, readBytes);
+                                }
+                                if (zipEntryName.startsWith("glibc/bin/") || zipEntryName.startsWith("glibc/lib/getconf/")
+                                    || "glibc/lib/ld-linux-aarch64.so.1".equals(zipEntryName)) {
+                                    //noinspection OctalInteger
+                                    Os.chmod(targetFile.getAbsolutePath(), 0700);
+                                }
+                            }
+                        }
+
+                        try (FileOutputStream markerOutStream = new FileOutputStream(markerFile)) {
+                            markerOutStream.write(appVersionName.getBytes());
+                        }
+
+                        Logger.logInfo(LOG_TAG, "Bundled glibc runtime extracted successfully to \"" + TERMUX_PREFIX_DIR_PATH + "/glibc\".");
+                    }
+                } catch (final Exception e) {
+                    // Bundled glibc is an optional addition, so failures are only logged and never block usage.
+                    Logger.logErrorExtended(LOG_TAG, "Bundled glibc setup error:\n" + Logger.getStackTracesStringArray(e)[0]);
                 }
             }
         }.start();
