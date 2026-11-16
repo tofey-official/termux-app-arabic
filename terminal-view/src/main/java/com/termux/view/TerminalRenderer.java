@@ -94,6 +94,7 @@ public final class TerminalRenderer {
             int lastRunStartColumn = -1;
             int lastRunStartIndex = 0;
             boolean lastRunFontWidthMismatch = false;
+            boolean lastRunIsRtlBatch = false;
             int currentCharIndex = 0;
             float measuredWidthForRun = 0.f;
 
@@ -119,6 +120,7 @@ public final class TerminalRenderer {
                     lastRunStartColumn = column + 1;
                     lastRunStartIndex = currentCharIndex;
                     lastRunFontWidthMismatch = false;
+                    lastRunIsRtlBatch = false;
                     currentCharIndex += charsForCodePoint;
                     continue;
                 }
@@ -134,7 +136,15 @@ public final class TerminalRenderer {
                     currentCharIndex, charsForCodePoint);
                 final boolean fontWidthMismatch = Math.abs(measuredCodePointWidth / mFontWidth - codePointWcWidth) > 0.01;
 
-                if (style != lastRunStyle || insideCursor != lastRunInsideCursor || insideSelection != lastRunInsideSelection || fontWidthMismatch || lastRunFontWidthMismatch) {
+                // Batch consecutive right-to-left characters (e.g. Arabic) and neutral characters
+                // following them into a single run, even when their measured widths do not match
+                // the terminal cell width. Splitting them per code point would destroy the
+                // HarfBuzz shaping context, which draws Arabic letters in their isolated forms
+                // and in logical (left-to-right) order instead of the correct visual order.
+                final boolean charIsRtl = isRtlCodePoint(codePoint);
+                final boolean continueRtlBatch = lastRunIsRtlBatch && !isStrongLtrCodePoint(codePoint);
+                if (style != lastRunStyle || insideCursor != lastRunInsideCursor || insideSelection != lastRunInsideSelection
+                    || (!continueRtlBatch && (fontWidthMismatch || lastRunFontWidthMismatch))) {
                     if (column == 0 || column == lastRunStartColumn) {
                         // Skip first column as there is nothing to draw, just record the current style.
                     } else {
@@ -156,7 +166,9 @@ public final class TerminalRenderer {
                     lastRunStartColumn = column;
                     lastRunStartIndex = currentCharIndex;
                     lastRunFontWidthMismatch = fontWidthMismatch;
+                    lastRunIsRtlBatch = false;
                 }
+                if (charIsRtl) lastRunIsRtlBatch = true;
                 measuredWidthForRun += measuredCodePointWidth;
                 column += codePointWcWidth;
                 currentCharIndex += charsForCodePoint;
@@ -270,16 +282,29 @@ public final class TerminalRenderer {
         if (savedMatrix) canvas.restore();
     }
 
-    /** Returns true if the run contains Arabic (or other right-to-left) characters and no strong left-to-right ones. */
+    /** Returns true if the code point is a strong right-to-left character (Arabic or Hebrew). */
+    private static boolean isRtlCodePoint(int codePoint) {
+        return (codePoint >= 0x0590 && codePoint <= 0x05FF)   // Hebrew
+            || (codePoint >= 0x0600 && codePoint <= 0x06FF)   // Arabic
+            || (codePoint >= 0x0750 && codePoint <= 0x077F)   // Arabic Supplement
+            || (codePoint >= 0x08A0 && codePoint <= 0x08FF)   // Arabic Extended-A
+            || (codePoint >= 0xFB50 && codePoint <= 0xFDFF)   // Arabic Presentation Forms-A
+            || (codePoint >= 0xFE70 && codePoint <= 0xFEFF);  // Arabic Presentation Forms-B
+    }
+
+    /** Returns true if the code point is a strong left-to-right character (basic Latin letters). */
+    private static boolean isStrongLtrCodePoint(int codePoint) {
+        return (codePoint >= 'A' && codePoint <= 'Z') || (codePoint >= 'a' && codePoint <= 'z');
+    }
+
+    /** Returns true if the run contains right-to-left characters (e.g. Arabic) and no strong left-to-right ones. */
     private static boolean isRtlRun(char[] text, int startCharIndex, int runWidthChars) {
         boolean hasRtl = false;
         for (int i = startCharIndex, end = startCharIndex + runWidthChars; i < end; i++) {
             char c = text[i];
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
+            if (isStrongLtrCodePoint(c))
                 return false; // A strong left-to-right character overrides the run direction.
-            if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F)
-                || (c >= 0x08A0 && c <= 0x08FF) || (c >= 0xFB50 && c <= 0xFDFF)
-                || (c >= 0xFE70 && c <= 0xFEFF))
+            if (isRtlCodePoint(c))
                 hasRtl = true;
         }
         return hasRtl;
