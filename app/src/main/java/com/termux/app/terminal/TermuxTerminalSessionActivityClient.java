@@ -510,10 +510,27 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
             }
             updateBackgroundColor();
 
-            final Typeface newTypeface = (fontFile.exists() && fontFile.length() > 0) ? Typeface.createFromFile(fontFile) : Typeface.MONOSPACE;
+            final Typeface newTypeface;
+            if (fontFile.exists() && fontFile.length() > 0) {
+                newTypeface = Typeface.createFromFile(fontFile);
+            } else {
+                // Use the bundled Vazirmatn font by default. The system "monospace" font
+                // has no Arabic glyphs, so Arabic output would be rendered as boxes.
+                newTypeface = loadBundledArabicTypeface();
+            }
             mActivity.getTerminalView().setTypeface(newTypeface);
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Error in checkForFontAndColors()", e);
+        }
+    }
+
+    /** Load the bundled Vazirmatn font (supports both Arabic and Latin), falling back to the system monospace font on failure. */
+    private Typeface loadBundledArabicTypeface() {
+        try {
+            return Typeface.createFromAsset(mActivity.getAssets(), "fonts/Vazirmatn-Regular.ttf");
+        } catch (Exception e) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to load the bundled Arabic font, falling back to system monospace", e);
+            return Typeface.MONOSPACE;
         }
     }
 

@@ -257,13 +257,32 @@ public final class TerminalRenderer {
 
             // The text alignment is the default Paint.Align.LEFT.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, false, mTextPaint);
+                // Pass true for the isRtl flag when the run consists of right-to-left
+                // characters (e.g. Arabic), so that they are drawn in the correct visual
+                // order. Runs containing strong left-to-right characters keep the old behavior.
+                boolean isRtl = isRtlRun(text, startCharIndex, runWidthChars);
+                canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, isRtl, mTextPaint);
             } else {
                 canvas.drawText(text, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, mTextPaint);
             }
         }
 
         if (savedMatrix) canvas.restore();
+    }
+
+    /** Returns true if the run contains Arabic (or other right-to-left) characters and no strong left-to-right ones. */
+    private static boolean isRtlRun(char[] text, int startCharIndex, int runWidthChars) {
+        boolean hasRtl = false;
+        for (int i = startCharIndex, end = startCharIndex + runWidthChars; i < end; i++) {
+            char c = text[i];
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
+                return false; // A strong left-to-right character overrides the run direction.
+            if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F)
+                || (c >= 0x08A0 && c <= 0x08FF) || (c >= 0xFB50 && c <= 0xFDFF)
+                || (c >= 0xFE70 && c <= 0xFEFF))
+                hasRtl = true;
+        }
+        return hasRtl;
     }
 
     public float getFontWidth() {

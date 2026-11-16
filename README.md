@@ -1,5 +1,7 @@
 # Termux application
 
+> **Arabic fork note:** This fork of [termux/termux-app](https://github.com/termux/termux-app) bundles the **Vazirmatn** font (Arabic + Latin, OFL licensed) as the default terminal font and renders Arabic runs in the correct right-to-left order. Custom fonts placed at `~/.termux/font.ttf` still take precedence. Built APKs are produced by the `Build` GitHub Actions workflow on every push to `master`.
+
 [![Build status](https://github.com/termux/termux-app/workflows/Build/badge.svg)](https://github.com/termux/termux-app/actions)
 [![Testing status](https://github.com/termux/termux-app/workflows/Unit%20tests/badge.svg)](https://github.com/termux/termux-app/actions)
 [![Join the chat at https://gitter.im/termux/termux](https://badges.gitter.im/termux/termux.svg)](https://gitter.im/termux/termux)
