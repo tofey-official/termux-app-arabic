@@ -114,6 +114,7 @@ final class TermuxInstaller {
                 Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
             } else {
                 setupGlibcIfNeeded(activity);
+                AntigravityInstaller.setupIfNeeded(activity);
                 whenDone.run();
                 return;
             }
@@ -229,6 +230,8 @@ final class TermuxInstaller {
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
                     setupGlibcIfNeeded(activity);
+
+                    AntigravityInstaller.setupIfNeeded(activity);
 
                     activity.runOnUiThread(whenDone);
 
