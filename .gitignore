@@ -10,6 +10,8 @@ release/
 .externalNativeBuild
 .cxx
 *.zip
+# The bundled glibc runtime asset is a committed source file, not a build artifact.
+!app/src/main/assets/glibc/glibc-aarch64.zip
 
 # Local configuration file (sdk path, etc)
 local.properties
