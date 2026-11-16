@@ -22,6 +22,10 @@ android {
     def splitAPKsForDebugBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS") ?: "1"
     def splitAPKsForReleaseBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS") ?: "0" // F-Droid does not support split APKs #1904
 
+    androidResources {
+        noCompress += 'tgz' // app/src/main/assets/antigravity-standalone.tgz is already gzip compressed
+    }
+
     dependencies {
         implementation "androidx.annotation:annotation:1.9.0"
         implementation "androidx.core:core:1.13.1"
@@ -43,8 +47,8 @@ android {
     defaultConfig {
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
-        versionCode 122
-        versionName "0.118.0-arabic.4"
+        versionCode 123
+        versionName "0.118.0-arabic.5"
 
         if (appVersionName) versionName = appVersionName
         validateVersionName(versionName)
