@@ -7,6 +7,7 @@ import android.os.StatFs;
 import com.termux.shared.file.FileUtils;
 import com.termux.shared.logger.Logger;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -139,8 +140,9 @@ final class AntigravityInstaller {
             }
 
             JSONObject release = new JSONObject(response.toString());
-            for (Object assetObject : release.getJSONArray("assets")) {
-                JSONObject asset = (JSONObject) assetObject;
+            JSONArray assets = release.getJSONArray("assets");
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject asset = assets.getJSONObject(i);
                 if (AGY_RELEASE_ASSET.equals(asset.optString("name"))) {
                     String url = asset.optString("browser_download_url", "");
                     if (!url.isEmpty()) return url;
@@ -232,6 +234,7 @@ final class AntigravityInstaller {
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(false);
         connection.setRequestProperty("User-Agent", "termux-antigravity-installer");
+        connection.setRequestProperty("Accept-Encoding", "identity");
         connection.setRequestProperty("Accept", "application/octet-stream");
         return connection;
     }
