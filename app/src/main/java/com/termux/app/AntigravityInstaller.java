@@ -3,11 +3,13 @@ package com.termux.app;
 import android.content.Context;
 import android.os.Build;
 import android.os.StatFs;
+import android.system.ErrnoException;
 
 import com.termux.shared.file.FileUtils;
 import com.termux.shared.logger.Logger;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -124,7 +126,7 @@ final class AntigravityInstaller {
     }
 
     /** Resolves the browser download URL of the latest "antigravity-termux-standalone.tar.gz" asset. */
-    private static String resolveLatestReleaseAssetUrl() throws IOException {
+    private static String resolveLatestReleaseAssetUrl() throws IOException, JSONException {
         HttpURLConnection connection = openConnection(AGY_RELEASES_API_URL);
         try {
             int responseCode = connection.getResponseCode();
@@ -193,7 +195,7 @@ final class AntigravityInstaller {
     }
 
     /** Extracts "agy" and "agy.va39" from the downloaded tarball and installs them into "$PREFIX/bin". */
-    private static void installBinariesFromTarball(File tarballFile) throws IOException {
+    private static void installBinariesFromTarball(File tarballFile) throws IOException, ErrnoException {
         File installDir = new File(AGY_TMP_DIR_PATH, "agy-install." + System.nanoTime());
         try {
             installDir.mkdirs();
