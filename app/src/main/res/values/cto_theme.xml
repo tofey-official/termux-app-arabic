@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- CTO chat interface theme and strings -->
+
+    <style name="Theme.CTO" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/cto_primary</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSurface">@color/cto_surface</item>
+        <item name="android:colorBackground">@color/cto_bg</item>
+        <item name="android:windowBackground">@color/cto_bg</item>
+        <item name="android:statusBarColor">@color/cto_bg</item>
+        <item name="android:navigationBarColor">@color/cto_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.CTO.Dialog" parent="Theme.Material3.Dark.Dialog.Alert">
+        <item name="colorPrimary">@color/cto_primary</item>
+        <item name="android:windowBackground">@color/cto_surface</item>
+    </style>
+
+    <style name="CtoSuggestion">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_columnWeight">1</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/cto_bg_suggest</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:textColor">#C7D0E2</item>
+        <item name="android:textDirection">firstStrong</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">2</item>
+    </style>
+
+    <color name="cto_bg">#0A0E17</color>
+    <color name="cto_surface">#161C2A</color>
+    <color name="cto_primary">#7C8CFF</color>
+
+    <string name="cto_app_name">CTO</string>
+    <string name="cto_tagline">ذكاء Antigravity داخل جهازك — بدون سطر أوامر</string>
+    <string name="cto_hint_input">اسأل أي شيء…</string>
+    <string name="cto_preparing_engine">جاري تجهيز محرك CTO — أول مرة تستغرق دقيقة تقريباً…</string>
+    <string name="cto_engine_ready">محرك CTO جاهز ✓</string>
+    <string name="cto_engine_not_ready">المحرك لم يجهز بعد — لحظات ويصبح جاهزاً</string>
+    <string name="cto_engine_wait_timeout">تعذر تجهيز المحرك تلقائياً — افتح الطرفية من زر الأعلى وشغّل agy لمعرفة السبب</string>
+    <string name="cto_model_dialog_title">اختر النموذج</string>
+    <string name="cto_new_chat_title">محادثة جديدة؟</string>
+    <string name="cto_new_chat_body">سيبدأ agy سياقاً جديداً مع الرسالة القادمة، وستُمسح الدردشة الحالية من الشاشة.</string>
+    <string name="cto_new_chat_confirm">محادثة جديدة</string>
+    <string name="cto_send_desc">إرسال</string>
+    <string name="cto_stop_desc">إيقاف</string>
+    <string name="cto_terminal_desc">فتح الطرفية</string>
+    <string name="cto_new_chat_desc">محادثة جديدة</string>
+
+</resources>
