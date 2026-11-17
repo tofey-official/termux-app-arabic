@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
 import android.os.Build;
 import android.os.Environment;
 import android.system.Os;
@@ -29,6 +32,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -66,6 +71,9 @@ final class TermuxInstaller {
     private static final String GLIBC_BUNDLE_ASSET = "glibc/glibc-aarch64.zip";
     /** Marker file written under $PREFIX/glibc after the bundled glibc runtime is extracted, containing the app version that extracted it. */
     private static final String GLIBC_BUNDLE_MARKER_PATH = TERMUX_PREFIX_DIR_PATH + "/glibc/.termux-bundled-version";
+
+    /** Public DNS servers used to build "resolv.conf" when the active network does not expose any. */
+    private static final String[] FALLBACK_DNS_SERVERS = {"8.8.8.8", "8.8.4.4", "1.1.1.1"};
 
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
@@ -254,8 +262,10 @@ final class TermuxInstaller {
     /**
      * Extract the glibc runtime bundled in the app assets into "$PREFIX/glibc" if it is missing or
      * outdated, so that glibc-linked binaries (like the antigravity CLI) can run without manually
-     * installing the termux-glibc repository packages. The extraction is best-effort, runs in a
-     * background thread and is skipped on devices that do not support arm64-v8a.
+     * installing the termux-glibc repository packages. On every start it also (re)writes the
+     * glibc resolver configuration files under "$PREFIX/glibc/etc" (see
+     * {@link #writeGlibcEtcFiles}), since glibc binaries cannot resolve host names without them.
+     * Best-effort, runs in a background thread and is skipped on devices without arm64-v8a.
      */
     static void setupGlibcIfNeeded(final Context context) {
         new Thread() {
@@ -280,6 +290,7 @@ final class TermuxInstaller {
                         File loaderFile = new File(TERMUX_PREFIX_DIR_PATH, "glibc/lib/ld-linux-aarch64.so.1");
                         File markerFile = new File(GLIBC_BUNDLE_MARKER_PATH);
 
+                        boolean needsExtraction = true;
                         // Skip extraction if it was already done for this app version; a version
                         // mismatch re-extracts so that app updates refresh the bundled runtime.
                         if (FileUtils.regularFileExists(loaderFile.getAbsolutePath(), false)
@@ -287,52 +298,152 @@ final class TermuxInstaller {
                             try (BufferedReader markerReader = new BufferedReader(new InputStreamReader(new FileInputStream(markerFile)))) {
                                 if (appVersionName.equals(markerReader.readLine())) {
                                     Logger.logInfo(LOG_TAG, "Bundled glibc runtime already extracted.");
-                                    return;
+                                    needsExtraction = false;
                                 }
                             }
                         }
 
-                        Logger.logInfo(LOG_TAG, "Extracting bundled glibc runtime from \"" + GLIBC_BUNDLE_ASSET + "\".");
+                        if (needsExtraction) {
+                            Logger.logInfo(LOG_TAG, "Extracting bundled glibc runtime from \"" + GLIBC_BUNDLE_ASSET + "\".");
 
-                        final byte[] buffer = new byte[8096];
-                        try (ZipInputStream zipInput = new ZipInputStream(context.getAssets().open(GLIBC_BUNDLE_ASSET))) {
-                            ZipEntry zipEntry;
-                            while ((zipEntry = zipInput.getNextEntry()) != null) {
-                                String zipEntryName = zipEntry.getName();
-                                File targetFile = new File(TERMUX_PREFIX_DIR_PATH, zipEntryName);
-                                if (zipEntry.isDirectory()) {
-                                    if (!targetFile.isDirectory() && !targetFile.mkdirs())
-                                        throw new RuntimeException("Failed to create directory: " + targetFile.getAbsolutePath());
-                                    continue;
-                                }
-                                File parentDir = targetFile.getParentFile();
-                                if (parentDir != null && !parentDir.isDirectory() && !parentDir.mkdirs())
-                                    throw new RuntimeException("Failed to create parent directory: " + parentDir.getAbsolutePath());
-                                try (FileOutputStream outStream = new FileOutputStream(targetFile)) {
-                                    int readBytes;
-                                    while ((readBytes = zipInput.read(buffer)) != -1)
-                                        outStream.write(buffer, 0, readBytes);
-                                }
-                                if (zipEntryName.startsWith("glibc/bin/") || zipEntryName.startsWith("glibc/lib/getconf/")
-                                    || "glibc/lib/ld-linux-aarch64.so.1".equals(zipEntryName)) {
-                                    //noinspection OctalInteger
-                                    Os.chmod(targetFile.getAbsolutePath(), 0700);
+                            final byte[] buffer = new byte[8096];
+                            try (ZipInputStream zipInput = new ZipInputStream(context.getAssets().open(GLIBC_BUNDLE_ASSET))) {
+                                ZipEntry zipEntry;
+                                while ((zipEntry = zipInput.getNextEntry()) != null) {
+                                    String zipEntryName = zipEntry.getName();
+                                    File targetFile = new File(TERMUX_PREFIX_DIR_PATH, zipEntryName);
+                                    if (zipEntry.isDirectory()) {
+                                        if (!targetFile.isDirectory() && !targetFile.mkdirs())
+                                            throw new RuntimeException("Failed to create directory: " + targetFile.getAbsolutePath());
+                                        continue;
+                                    }
+                                    File parentDir = targetFile.getParentFile();
+                                    if (parentDir != null && !parentDir.isDirectory() && !parentDir.mkdirs())
+                                        throw new RuntimeException("Failed to create parent directory: " + parentDir.getAbsolutePath());
+                                    try (FileOutputStream outStream = new FileOutputStream(targetFile)) {
+                                        int readBytes;
+                                        while ((readBytes = zipInput.read(buffer)) != -1)
+                                            outStream.write(buffer, 0, readBytes);
+                                    }
+                                    if (zipEntryName.startsWith("glibc/bin/") || zipEntryName.startsWith("glibc/lib/getconf/")
+                                        || "glibc/lib/ld-linux-aarch64.so.1".equals(zipEntryName)) {
+                                        //noinspection OctalInteger
+                                        Os.chmod(targetFile.getAbsolutePath(), 0700);
+                                    }
                                 }
                             }
+
+                            try (FileOutputStream markerOutStream = new FileOutputStream(markerFile)) {
+                                markerOutStream.write(appVersionName.getBytes());
+                            }
+
+                            Logger.logInfo(LOG_TAG, "Bundled glibc runtime extracted successfully to \"" + TERMUX_PREFIX_DIR_PATH + "/glibc\".");
                         }
 
-                        try (FileOutputStream markerOutStream = new FileOutputStream(markerFile)) {
-                            markerOutStream.write(appVersionName.getBytes());
-                        }
-
-                        Logger.logInfo(LOG_TAG, "Bundled glibc runtime extracted successfully to \"" + TERMUX_PREFIX_DIR_PATH + "/glibc\".");
+                        // The resolver configuration files are (re)written on every start so that
+                        // the DNS servers follow network changes; glibc binaries like "agy" fail
+                        // to resolve even "localhost" without them.
+                        writeGlibcEtcFiles(context);
                     }
                 } catch (final Exception e) {
                     // Bundled glibc is an optional addition, so failures are only logged and never block usage.
                     Logger.logErrorExtended(LOG_TAG, "Bundled glibc setup error:\n" + Logger.getStackTracesStringArray(e)[0]);
+                    // Still ensure the resolver configuration exists so already-extracted glibc
+                    // binaries are not left without it after a failed re-extraction attempt.
+                    writeGlibcEtcFiles(context);
                 }
             }
         }.start();
+    }
+
+    /**
+     * Write the glibc resolver configuration files into "$PREFIX/glibc/etc". This fork's glibc
+     * runtime is built with its sysconfdir at "$PREFIX/glibc/etc", but the bundled runtime does
+     * not include "hosts", "resolv.conf" or "nsswitch.conf", and Android does not expose the
+     * "/etc" files glibc would read on a standard Linux system. Without them getaddrinfo fails
+     * with "Temporary failure in name resolution" even for "localhost", which breaks glibc-linked
+     * binaries like the antigravity CLI. "resolv.conf" is rebuilt on every start from the DNS
+     * servers of the active network (falling back to public resolvers) so that it follows Wi-Fi
+     * and mobile data changes; it is also written to "$PREFIX/etc/resolv.conf", which the
+     * antigravity launcher checks before starting its glibc payload. Best-effort: failures are
+     * only logged and never block usage.
+     */
+    private static void writeGlibcEtcFiles(final Context context) {
+        File glibcEtcDir = new File(TERMUX_PREFIX_DIR_PATH, "glibc/etc");
+        if (!glibcEtcDir.isDirectory() && !glibcEtcDir.mkdirs()) {
+            Logger.logErrorExtended(LOG_TAG, "Failed to create \"" + glibcEtcDir.getAbsolutePath() + "\"");
+            return;
+        }
+
+        // Map "localhost" to the loopback address without needing a DNS lookup.
+        String hostsContent = "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n";
+        // Resolve names from the files above before querying DNS servers.
+        String nsswitchContent = "hosts: files dns\n"
+            + "passwd: files\ngroup: files\nshadow: files\ngshadow: files\n"
+            + "services: files\nnetworks: files\nprotocols: files\n"
+            + "ethers: files\nrpc: files\nnetgroup: files\naliases: files\n";
+        // Legacy resolver order for code paths that use gethostbyname() instead of getaddrinfo().
+        String hostConfContent = "order hosts,bind\nmulti on\n";
+
+        List<String> dnsServers = getActiveDnsServers(context);
+        String resolvConfContent = buildResolvConf(dnsServers);
+
+        writeSmallFile(new File(glibcEtcDir, "hosts"), hostsContent);
+        writeSmallFile(new File(glibcEtcDir, "nsswitch.conf"), nsswitchContent);
+        writeSmallFile(new File(glibcEtcDir, "host.conf"), hostConfContent);
+        writeSmallFile(new File(glibcEtcDir, "resolv.conf"), resolvConfContent);
+
+        File etcDir = new File(TERMUX_PREFIX_DIR_PATH, "etc");
+        if (etcDir.isDirectory()) {
+            writeSmallFile(new File(etcDir, "resolv.conf"), resolvConfContent);
+            writeSmallFile(new File(etcDir, "hosts"), hostsContent);
+        }
+
+        Logger.logInfo(LOG_TAG, "glibc resolver configuration written to \"" + glibcEtcDir.getAbsolutePath() + "\".");
+    }
+
+    /** Build a "resolv.conf" body from the DNS servers of the active network, with public fallbacks. */
+    private static List<String> getActiveDnsServers(Context context) {
+        List<String> dnsServers = new ArrayList<>();
+        try {
+            ConnectivityManager connectivityManager =
+                (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            Network activeNetwork = connectivityManager != null ? connectivityManager.getActiveNetwork() : null;
+            LinkProperties linkProperties = activeNetwork != null ? connectivityManager.getLinkProperties(activeNetwork) : null;
+            if (linkProperties != null) {
+                for (InetAddress address : linkProperties.getDnsServers()) {
+                    String hostAddress = address.getHostAddress();
+                    if (hostAddress != null && !hostAddress.isEmpty())
+                        dnsServers.add(hostAddress);
+                }
+            }
+        } catch (final Exception e) {
+            Logger.logInfo(LOG_TAG, "Could not read the DNS servers of the active network: " + e.getMessage());
+        }
+        if (dnsServers.isEmpty())
+            dnsServers.addAll(java.util.Arrays.asList(FALLBACK_DNS_SERVERS));
+        return dnsServers;
+    }
+
+    /** Build a "resolv.conf" body from the given DNS server addresses. */
+    private static String buildResolvConf(List<String> dnsServers) {
+        StringBuilder builder = new StringBuilder();
+        for (String dnsServer : dnsServers)
+            builder.append("nameserver ").append(dnsServer).append('\n');
+        return builder.toString();
+    }
+
+    /** Atomically write a small text file: write to a temp file first, then rename it over the target. */
+    private static void writeSmallFile(File target, String content) {
+        File tempFile = new File(target.getAbsolutePath() + ".tmp");
+        try (FileOutputStream outStream = new FileOutputStream(tempFile)) {
+            outStream.write(content.getBytes(StandardCharsets.UTF_8));
+        } catch (final Exception e) {
+            Logger.logErrorExtended(LOG_TAG, "Failed to write \"" + tempFile.getAbsolutePath() + "\": " + e.getMessage());
+            return;
+        }
+        if (!tempFile.renameTo(target))
+            Logger.logErrorExtended(LOG_TAG, "Failed to move \"" + tempFile.getAbsolutePath() + "\" to \"" + target.getAbsolutePath() + "\"");
     }
 
     public static void showBootstrapErrorDialog(Activity activity, Runnable whenDone, String message) {
