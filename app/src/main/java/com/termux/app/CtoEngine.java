@@ -247,7 +247,7 @@ public final class CtoEngine {
                 mCurrentProcess = null;
             }
 
-            String replyText = cleanCliOutput(stdout);
+            String replyText = cleanCliOutput(stdout.toString());
             boolean success = process.exitValue() == 0 && !replyText.trim().isEmpty();
             if (success) {
                 synchronized (this) {

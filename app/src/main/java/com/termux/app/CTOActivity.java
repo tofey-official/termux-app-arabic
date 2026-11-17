@@ -19,6 +19,7 @@ import androidx.core.view.WindowCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.termux.R;
 import com.termux.shared.logger.Logger;
 
 import java.io.File;
