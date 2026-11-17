@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import com.termux.shared.logger.Logger;
+import com.termux.shared.termux.shell.command.environment.TermuxShellEnvironment;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -17,6 +18,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -186,14 +188,19 @@ public final class CtoEngine {
         try {
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.directory(workspaceDir);
-            Map<String, String> environment = processBuilder.environment();
-            environment.put("HOME", getTermuxHome().getAbsolutePath());
-            environment.put("PREFIX", TERMUX_PREFIX_DIR_PATH);
-            environment.put("PATH", TERMUX_PREFIX_DIR_PATH + "/bin");
-            environment.put("TMPDIR", TERMUX_PREFIX_DIR_PATH + "/tmp");
-            environment.put("TERM", "dumb");
-            environment.put("LANG", "en_US.UTF-8");
-            environment.put("NO_COLOR", "1");
+            // Use the same environment that Termux terminal sessions get (built by
+            // TermuxShellEnvironment: TERMUX_VERSION, PREFIX, PATH, TMPDIR, LANG, ...).
+            // The bundled agy launcher refuses to run outside native Termux and checks
+            // TERMUX_VERSION to decide; without it it errors out as a PRoot environment.
+            HashMap<String, String> environment = new TermuxShellEnvironment().getEnvironment(context, false);
+            processBuilder.environment().clear();
+            processBuilder.environment().putAll(environment);
+            Map<String, String> overrides = processBuilder.environment();
+            overrides.put("TERM", "dumb");
+            overrides.put("NO_COLOR", "1");
+            // The headless engine has no TTY for the interactive update prompt, so let
+            // the launcher apply its standalone updates non-interactively.
+            overrides.put("AGY_AUTO_UPDATE", "1");
 
             Logger.logInfo(LOG_TAG, "Running agy: " + String.join(" ", command));
             Process process = processBuilder.start();
