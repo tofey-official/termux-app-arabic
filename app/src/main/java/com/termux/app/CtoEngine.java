@@ -60,10 +60,33 @@ public final class CtoEngine {
     private static final int CHUNK_FLUSH_INTERVAL_MS = 200;
     /** Maximum chat history entries kept in the persisted history. */
     private static final int MAX_HISTORY_ENTRIES = 200;
+    /** Hard cap for one agy invocation: the UI must not spin forever when the CLI hangs. */
+    private static final long AGY_TIMEOUT_MS = 10 * 60 * 1000L;
 
     /** Regexes stripping ANSI CSI sequences, OSC sequences and carriage returns from CLI output. */
     private static final String ANSI_CSI_REGEX = "\u001B\\[[0-9;?]*[A-Za-z]";
     private static final String ANSI_OSC_REGEX = "\u001B\\][^\u0007\u001B]*(\u0007|\u001B\\\\)";
+
+    /** Arabic guidance shown when agy reports it is not signed in: the headless engine cannot open a browser. */
+    private static final String AUTH_GUIDANCE =
+        "**تسجيل الدخول مطلوب — مرة واحدة فقط**\n\n"
+            + "المحرك غير مسجّل الدخول إلى Antigravity بعد، ووضع الدردشة الصامت لا يستطيع فتح "
+            + "المتصفح لتسجيل الدخول تلقائياً.\n\n"
+            + "**الخطوات:**\n"
+            + "1. اضغط زر الطرفية في أعلى يمين هذه الشاشة\n"
+            + "2. اكتب `agy` ثم اضغط Enter — ستفتح واجهة Antigravity\n"
+            + "3. اكتب `/login` ثم اضغط Enter\n"
+            + "4. افتح الرابط الذي يظهر داخل المتصفح وسجّل الدخول بحساب Google وأكمل الخطوات\n"
+            + "5. ارجع إلى الدردشة وأعد إرسال رسالتك\n\n"
+            + "ملاحظة: عند أول تسجيل دخول قد تُخبِرك خدمة Google بأن حسابك يتجهّز خلال دقيقة "
+            + "وقد تستغرق العملية أحياناً حتى ساعة تقريباً — اتركها تكتمل ثم أعد المحاولة من هنا.";
+
+    /** Arabic guidance shown when an agy invocation is killed for exceeding {@link #AGY_TIMEOUT_MS}. */
+    private static final String TIMEOUT_GUIDANCE =
+        "**انتهت مهلة الانتظار (10 دقائق)**\n\n"
+            + "لم يصل رد من المحرك خلال المهلة. إذا كانت هذه أول جلسة بعد تسجيل الدخول فقد يكون "
+            + "تجهيز حسابك في خدمة Google ما زال جارياً — انتظر قليلاً ثم أعد إرسال الرسالة. "
+            + "إن تكرر الأمر افتح الطرفية (أعلى اليمين) وشغّل `agy` لرؤية الرسالة التفصيلية.";
 
     public interface Listener {
         /** A new message was appended to {@link #getMessages()}. */
@@ -89,6 +112,8 @@ public final class CtoEngine {
     private String mModel = MODEL_DEFAULT;
     private int mNextId = 1;
     private boolean mHistoryLoaded;
+    /** Set by the watchdog thread when an agy invocation is killed for exceeding the timeout. */
+    private volatile boolean mTimedOut;
 
     private CtoEngine() {
     }
@@ -184,7 +209,9 @@ public final class CtoEngine {
             workspaceDir.mkdirs();
 
         String exitDetails = null;
+        boolean authFailure = false;
         StringBuilder stdout = new StringBuilder();
+        Thread watchdog = null;
         try {
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.directory(workspaceDir);
@@ -207,6 +234,7 @@ public final class CtoEngine {
             synchronized (this) {
                 mCurrentProcess = process;
             }
+            watchdog = startWatchdog(process);
 
             final StringBuilder stderrTail = new StringBuilder();
             Thread stderrThread = new Thread() {
@@ -250,31 +278,54 @@ public final class CtoEngine {
             }
             flushPending(reply, pending);
             process.waitFor();
+            if (watchdog != null)
+                watchdog.interrupt();
             synchronized (this) {
                 mCurrentProcess = null;
             }
 
             String replyText = cleanCliOutput(stdout.toString());
-            boolean success = process.exitValue() == 0 && !replyText.trim().isEmpty();
+            String combined = replyText + "\n" + stderrTail;
+            // agy in headless print mode fails when it is not signed in (it cannot open a
+            // browser for the OAuth flow); show the one-time login guidance instead of raw
+            // CLI errors. Only treat short or failed output as an auth problem so that a
+            // genuine reply mentioning e.g. GEMINI_API_KEY is never mistaken for one.
+            boolean authProblem = isAuthProblem(combined)
+                && (process.exitValue() != 0 || replyText.trim().length() < 400);
+            boolean success = process.exitValue() == 0 && !replyText.trim().isEmpty() && !authProblem;
             if (success) {
                 synchronized (this) {
                     reply.content = replyText;
                     reply.streaming = false;
                     mHasConversation = true;
                 }
+            } else if (authProblem) {
+                authFailure = true;
+                exitDetails = AUTH_GUIDANCE;
+            } else if (mTimedOut) {
+                exitDetails = TIMEOUT_GUIDANCE;
             } else {
                 exitDetails = buildErrorDetails(replyText, stderrTail, process.exitValue());
             }
         } catch (final IOException | InterruptedException e) {
-            exitDetails = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            synchronized (this) {
+                mCurrentProcess = null;
+            }
+            exitDetails = mTimedOut ? TIMEOUT_GUIDANCE
+                : (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        } finally {
+            if (watchdog != null)
+                watchdog.interrupt();
         }
 
         final String failure = exitDetails;
+        final boolean replaceReply = authFailure;
         mHandler.post(() -> {
             if (failure != null) {
-                // Replace the empty streaming reply with an explicit error message; keep any
-                // partial streamed content visible above the error details.
-                if (reply.content.trim().isEmpty()) {
+                // Replace the streaming reply with an explicit error message when it is empty
+                // or carries only the auth guidance text; otherwise keep any partial streamed
+                // content visible above the error details.
+                if (replaceReply || reply.content.trim().isEmpty()) {
                     mMessages.remove(reply);
                     mMessages.add(new CtoChatMessage(CtoChatMessage.Role.ERROR, reply.id,
                         reply.time, failure, false));
@@ -333,9 +384,43 @@ public final class CtoEngine {
         details.append("agy exited with code ").append(exitCode);
         if (!stderr.isEmpty())
             details.append(":\n```\n").append(abbreviate(stderr, 1500)).append("\n```");
-        if (stderr.contains("authentication required"))
-            details.insert(0, "**مطلوب تسجيل الدخول**: افتح الطرفية (زر ↑) وشغّل `agy` ثم سجّل الدخول، وارجع هنا.\n\n");
         return details.toString().trim();
+    }
+
+    /** Returns true when the combined CLI output indicates agy is not signed in to Antigravity. */
+    private static boolean isAuthProblem(String output) {
+        if (output == null)
+            return false;
+        String s = output.toLowerCase();
+        return s.contains("not logged in")
+            || s.contains("sign in once")
+            || s.contains("silent auth")
+            || s.contains("no controlling terminal")
+            || s.contains("gemini_api_key")
+            || s.contains("authentication failed or timed out")
+            || s.contains("sign-in timed out");
+    }
+
+    /** Starts a daemon thread that forcibly kills the given process after {@link #AGY_TIMEOUT_MS}. */
+    private Thread startWatchdog(final Process process) {
+        Thread watchdog = new Thread() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(AGY_TIMEOUT_MS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (process.isAlive()) {
+                    mTimedOut = true;
+                    process.destroyForcibly();
+                    Logger.logErrorExtended(LOG_TAG, "agy exceeded the " + AGY_TIMEOUT_MS + " ms timeout and was killed");
+                }
+            }
+        };
+        watchdog.setDaemon(true);
+        watchdog.start();
+        return watchdog;
     }
 
     private static String abbreviate(String text, int max) {
