@@ -53,45 +53,57 @@ final class AntigravityInstaller {
         new Thread() {
             @Override
             public void run() {
-                try {
-                    synchronized (AntigravityInstaller.class) {
-                        // The standalone binaries are only built for 64-bit arm devices.
-                        boolean isArm64Device = false;
-                        for (String abi : Build.SUPPORTED_ABIS) {
-                            if ("arm64-v8a".equals(abi)) {
-                                isArm64Device = true;
-                                break;
-                            }
-                        }
-                        if (!isArm64Device) {
-                            Logger.logInfo(LOG_TAG, "Antigravity setup skipped: no arm64-v8a support on device.");
-                            return;
-                        }
-
-                        if (FileUtils.regularFileExists(AGY_BIN_PATH, false)
-                            && FileUtils.regularFileExists(AGY_VA39_BIN_PATH, false)) {
-                            Logger.logInfo(LOG_TAG, "Antigravity CLI already installed.");
-                            return;
-                        }
-
-                        Logger.logInfo(LOG_TAG, "Installing bundled antigravity CLI.");
-
-                        if (!checkFreeSpace()) {
-                            Logger.logErrorExtended(LOG_TAG, "Antigravity setup skipped: not enough free space. It will be retried on next app start.");
-                            return;
-                        }
-
-                        installBinariesFromBundledTarball(context);
-
-                        Logger.logInfo(LOG_TAG, "Antigravity CLI installed successfully to \"" + TERMUX_PREFIX_DIR_PATH + "/bin\".");
-                    }
-                } catch (final Exception e) {
-                    // Automatic antigravity installation is a best-effort addition; failures are
-                    // only logged and retried on the next app start.
-                    Logger.logErrorExtended(LOG_TAG, "Antigravity setup error:\n" + Logger.getStackTracesStringArray(e)[0]);
-                }
+                installBlocking(context);
             }
         }.start();
+    }
+
+    /**
+     * Blocking variant of {@link #setupIfNeeded} that installs the bundled binaries when they
+     * are missing and returns whether "agy" exists afterwards. Safe to call while an async
+     * {@link #setupIfNeeded} run is in progress: both synchronize on the class monitor, so
+     * this simply waits for the other run and then re-checks the files.
+     */
+    static boolean installBlocking(final Context context) {
+        try {
+            synchronized (AntigravityInstaller.class) {
+                // The standalone binaries are only built for 64-bit arm devices.
+                boolean isArm64Device = false;
+                for (String abi : Build.SUPPORTED_ABIS) {
+                    if ("arm64-v8a".equals(abi)) {
+                        isArm64Device = true;
+                        break;
+                    }
+                }
+                if (!isArm64Device) {
+                    Logger.logInfo(LOG_TAG, "Antigravity setup skipped: no arm64-v8a support on device.");
+                    return false;
+                }
+
+                if (FileUtils.regularFileExists(AGY_BIN_PATH, false)
+                    && FileUtils.regularFileExists(AGY_VA39_BIN_PATH, false)) {
+                    Logger.logInfo(LOG_TAG, "Antigravity CLI already installed.");
+                    return true;
+                }
+
+                Logger.logInfo(LOG_TAG, "Installing bundled antigravity CLI.");
+
+                if (!checkFreeSpace()) {
+                    Logger.logErrorExtended(LOG_TAG, "Antigravity setup skipped: not enough free space. It will be retried on next app start.");
+                    return false;
+                }
+
+                installBinariesFromBundledTarball(context);
+
+                Logger.logInfo(LOG_TAG, "Antigravity CLI installed successfully to \"" + TERMUX_PREFIX_DIR_PATH + "/bin\".");
+                return FileUtils.regularFileExists(AGY_BIN_PATH, false);
+            }
+        } catch (final Exception e) {
+            // Automatic antigravity installation is a best-effort addition; failures are
+            // only logged and retried on the next app start or chat message.
+            Logger.logErrorExtended(LOG_TAG, "Antigravity setup error:\n" + Logger.getStackTracesStringArray(e)[0]);
+            return false;
+        }
     }
 
     private static boolean checkFreeSpace() {

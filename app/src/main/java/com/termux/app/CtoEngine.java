@@ -88,6 +88,17 @@ public final class CtoEngine {
             + "تجهيز حسابك في خدمة Google ما زال جارياً — انتظر قليلاً ثم أعد إرسال الرسالة. "
             + "إن تكرر الأمر افتح الطرفية (أعلى اليمين) وشغّل `agy` لرؤية الرسالة التفصيلية.";
 
+    /** Arabic guidance shown when the bundled agy CLI is not installed in the Termux prefix. */
+    private static final String ENGINE_MISSING_GUIDANCE =
+        "**المحرك غير مثبت بعد**\n\n"
+            + "لم يتم استخراج ملفات المحرك المدمجة (`agy`) إلى Termux. السبب عادة أحد اثنين:\n\n"
+            + "1. **فُتح التطبيق قبل لحظات** والاستخراج (~250 MB) لم يكتمل بعد — انتظر دقيقة "
+            + "أو دقيقتين ثم أعد إرسال رسالتك.\n"
+            + "2. **مساحة التخزين ممتلئة** — يحتاج الاستخراج مساحة حرة كافية؛ احذف الملفات "
+            + "القديمة (مثل ملفات APK السابقة في مجلد التنزيلات، كل واحدة ~211 MB) ثم أعد "
+            + "فتح التطبيق ليحاول التثبيت من جديد.\n\n"
+            + "للتحقق يدوياً: افتح الطرفية واكتب `ls -la $PREFIX/bin/agy` — إذا ظهر الملف فالمحرك جاهز.";
+
     public interface Listener {
         /** A new message was appended to {@link #getMessages()}. */
         void onMessageInserted(int position);
@@ -208,6 +219,14 @@ public final class CtoEngine {
         if (!workspaceDir.isDirectory())
             workspaceDir.mkdirs();
 
+        // The chat must also work right after a fresh install or an app update while the
+        // bundled CLI is still extracting, or when an earlier install attempt failed (e.g.
+        // the device ran out of storage): install it synchronously on this engine thread.
+        if (!AntigravityInstaller.installBlocking(context)) {
+            finishFailure(context, reply, ENGINE_MISSING_GUIDANCE, true);
+            return;
+        }
+
         String exitDetails = null;
         boolean authFailure = false;
         StringBuilder stdout = new StringBuilder();
@@ -322,25 +341,38 @@ public final class CtoEngine {
         final boolean replaceReply = authFailure;
         mHandler.post(() -> {
             if (failure != null) {
-                // Replace the streaming reply with an explicit error message when it is empty
-                // or carries only the auth guidance text; otherwise keep any partial streamed
-                // content visible above the error details.
-                if (replaceReply || reply.content.trim().isEmpty()) {
-                    mMessages.remove(reply);
-                    mMessages.add(new CtoChatMessage(CtoChatMessage.Role.ERROR, reply.id,
-                        reply.time, failure, false));
-                } else {
-                    synchronized (CtoEngine.this) {
-                        reply.streaming = false;
-                    }
-                    mMessages.add(new CtoChatMessage(CtoChatMessage.Role.ERROR, mNextId++,
-                        System.currentTimeMillis(), failure, false));
-                }
-                // The reply item may have been removed and replaced: refresh the whole list.
-                notifyMessageInserted(-1);
+                finishFailure(context, reply, failure, replaceReply);
             } else {
                 notifyMessageChanged(mMessages.indexOf(reply));
             }
+            synchronized (CtoEngine.this) {
+                mRunning = false;
+            }
+            saveHistory(context);
+            notifyRunningStateChanged();
+        });
+    }
+
+    /**
+     * Replaces the streaming reply with an explicit error message when it is empty or carries
+     * only guidance text, or keeps any partial streamed content visible above the error details.
+     */
+    private void finishFailure(final Context context, final CtoChatMessage reply,
+                               final String failure, final boolean replaceReply) {
+        mHandler.post(() -> {
+            if (replaceReply || reply.content.trim().isEmpty()) {
+                mMessages.remove(reply);
+                mMessages.add(new CtoChatMessage(CtoChatMessage.Role.ERROR, reply.id,
+                    reply.time, failure, false));
+            } else {
+                synchronized (CtoEngine.this) {
+                    reply.streaming = false;
+                }
+                mMessages.add(new CtoChatMessage(CtoChatMessage.Role.ERROR, mNextId++,
+                    System.currentTimeMillis(), failure, false));
+            }
+            // The reply item may have been removed and replaced: refresh the whole list.
+            notifyMessageInserted(-1);
             synchronized (CtoEngine.this) {
                 mRunning = false;
             }

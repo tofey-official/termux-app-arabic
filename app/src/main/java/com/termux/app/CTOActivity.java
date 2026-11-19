@@ -41,7 +41,7 @@ public class CTOActivity extends AppCompatActivity implements CtoEngine.Listener
     private static final String LOG_TAG = "CTOActivity";
 
     /** Max time (ms) to wait for the bundled agy binaries to appear after triggering install. */
-    private static final long AGY_WAIT_TIMEOUT_MS = 120000;
+    private static final long AGY_WAIT_TIMEOUT_MS = 300000;
     private static final long AGY_WAIT_INTERVAL_MS = 500;
 
     private static final String[] MODEL_LABELS = {
